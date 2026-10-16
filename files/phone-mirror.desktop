@@ -1,0 +1,12 @@
+[Desktop Entry]
+# Installed by steam-frame-phone-mirror's install.sh. Also listed in the VR
+# dashboard's "+" > Launch Program, where it opens as its own window.
+Type=Application
+Name=Phone
+GenericName=Phone screen
+Comment=Your Android phone's screen over Wi-Fi (scrcpy)
+Exec=@BIN@/phone-mirror
+Icon=smartphone
+Categories=Utility;
+Keywords=android;scrcpy;mirror;phone;
+Terminal=false

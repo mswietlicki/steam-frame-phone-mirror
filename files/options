@@ -1,0 +1,14 @@
+# scrcpy options for the "Phone" entry, one per line (scrcpy --help lists them).
+# Arguments given to phone-mirror come after these. install.sh writes this file
+# once; reinstalling keeps your changes.
+#
+# Video size and frame rate: decoding takes CPU from games. VR windows render
+# at 1280x720 anyway. --max-fps=60 scrolls smoother for a little more CPU.
+--max-size=1280
+--max-fps=30
+# The phone's own screen stays off while mirrored (battery, privacy).
+--turn-screen-off
+#
+# Others worth knowing:
+#   --no-audio      keep the phone's sound on the phone
+#   --stay-awake    the phone doesn't sleep (and lock) while mirrored; works only while it's charging

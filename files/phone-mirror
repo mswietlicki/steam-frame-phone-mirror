@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# Your Android phone's screen on the Steam Frame: scrcpy in the
+# localhost/phone-mirror podman container. Installed by install.sh from
+# https://github.com/mswietlicki/steam-frame-phone-mirror.
+#
+#   phone-mirror [SCRCPY_ARGS...]   mirror the paired phone (the "Phone" menu entry)
+#   phone-mirror pair               pair a phone; needs a terminal (it asks for the code)
+#   phone-mirror status             adb key, phones on the network, connected phones
+#
+# Default scrcpy options: ~/.config/phone-mirror/options. Last run's output:
+# ~/.local/share/phone-mirror/last.log.
+set -uo pipefail
+IMAGE=localhost/phone-mirror:latest
+NAME=phone-mirror
+STATE=$HOME/.local/share/phone-mirror
+CONF=$HOME/.config/phone-mirror/options
+LOG=$STATE/last.log
+
+# Steam preloads its overlay into what it launches; podman doesn't need it.
+unset LD_PRELOAD
+# Rootless podman (crun) creates its cgroup through systemd on the session bus.
+# The nested desktop has a bus of its own without systemd, so name the user bus.
+run=/run/user/$(id -u)
+pod=(env "XDG_RUNTIME_DIR=$run" "DBUS_SESSION_BUS_ADDRESS=unix:path=$run/bus" podman)
+
+base=("${pod[@]}" run --rm --network host --userns keep-id
+      -v "$STATE/home:/data" -v "$STATE/inside.sh:/opt/inside.sh:ro")
+
+# A message box when started from a menu, stderr in a terminal or over SSH.
+say() {
+  if [[ -t 2 || -z ${DISPLAY:-} ]]; then
+    echo "phone-mirror: $*" >&2
+  else
+    kdialog --title Phone --sorry "$*" > /dev/null 2>&1 || echo "phone-mirror: $*" >&2
+  fi
+}
+
+# ip:port of each phone advertising a wireless debugging service ($1) on the
+# LAN. The host's Avahi looks them up: Alpine's adb has no working mDNS.
+discover() {
+  avahi-browse -rtpk "$1" 2> /dev/null \
+    | awk -F';' '$1 == "=" && $3 == "IPv4" { print $8 ":" $9 }' | sort -u | tr '\n' ' '
+}
+
+# Wireless debugging addresses, asking again when an mDNS answer goes missing.
+phone_addrs() {
+  local a i
+  for i in 1 2 3; do
+    a=$(discover _adb-tls-connect._tcp)
+    [[ -n $a ]] && break
+  done
+  echo "$a"
+}
+
+case "${1:-}" in
+  pair)
+    cat << 'EOF'
+On the phone, on the same Wi-Fi as the Frame:
+  Settings > System > Developer options > Wireless debugging: turn it on,
+  then tap "Pair device with pairing code" and keep that screen open.
+Looking for the phone's pairing screen (up to a minute)...
+EOF
+    for i in {1..60}; do
+      pairing=$(discover _adb-tls-pairing._tcp)
+      [[ -n $pairing ]] && break
+      sleep 1
+    done
+    "${base[@]}" -it -e "PAIR_ADDR=${pairing%% *}" "$IMAGE" sh /opt/inside.sh pair || exit
+    echo "Checking the connection..."
+    "${base[@]}" -e "PHONE_ADDRS=$(phone_addrs)" "$IMAGE" sh /opt/inside.sh status | grep '^connected'
+    exit
+    ;;
+  status)
+    addrs=$(phone_addrs)
+    echo "phones advertising wireless debugging: ${addrs:-none}"
+    exec "${base[@]}" -e "PHONE_ADDRS=$addrs" "$IMAGE" sh /opt/inside.sh status
+    ;;
+  -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
+esac
+
+if [[ $("${pod[@]}" inspect -f '{{.State.Running}}' "$NAME" 2> /dev/null) == true ]]; then
+  say "Phone is already open: pick it under \"+\" in the dashboard."
+  exit 0
+fi
+"${pod[@]}" rm -f "$NAME" > /dev/null 2>&1
+
+opts=()
+if [[ -f $CONF ]]; then
+  while IFS= read -r l; do
+    [[ $l =~ ^[[:space:]]*(#|$) ]] || opts+=("$l")
+  done < "$CONF"
+fi
+
+# The host's X display (:0 from Steam's Launch Program, :2 on the desktop), GPU
+# and PulseAudio. --pid host gives the window its real pid (_NET_WM_PID) and
+# --ipc host lets X11 use shared memory.
+x=(-e "DISPLAY=${DISPLAY:-:0}" -v /tmp/.X11-unix:/tmp/.X11-unix)
+if [[ -n ${XAUTHORITY:-} && -f $XAUTHORITY ]]; then
+  x+=(-v "$XAUTHORITY:/tmp/xauthority:ro" -e XAUTHORITY=/tmp/xauthority)
+fi
+pulse=$run/pulse
+
+"${base[@]}" --name "$NAME" --pid host --ipc host --device /dev/dri "${x[@]}" \
+  -v "$pulse:$pulse" -e "PULSE_SERVER=unix:$pulse/native" -e SDL_VIDEO_DRIVER=x11 \
+  -e "PHONE_ADDRS=$(phone_addrs)" \
+  "$IMAGE" sh /opt/inside.sh run "${opts[@]}" "$@" > "$LOG" 2>&1
+rc=$?
+case $rc in
+  0) ;;
+  2) say "The phone disconnected." ;;
+  3) say $'Phone not found.\n\nOn the phone, turn on Wireless debugging (Settings > System > Developer options), on the same Wi-Fi as the Frame.\n\nFirst time: pair it by running ~/.local/bin/phone-mirror pair in a terminal.' ;;
+  *) say "Phone stopped with an error (exit $rc):"$'\n\n'"$(tail -n 6 "$LOG")" ;;
+esac
+exit $rc

@@ -1,0 +1,7 @@
+# Image for the phone mirror (install.sh builds it): scrcpy and adb from Alpine's
+# packages, plus what SDL 3 loads at run time (it links none of it): X11, GL with
+# Mesa's freedreno driver for the Frame's Adreno, and PulseAudio (PipeWire's).
+FROM docker.io/library/alpine:3.24
+RUN apk add --no-cache scrcpy \
+      libx11 libxext libxcursor libxi libxrandr libxfixes libxscrnsaver \
+      mesa-egl mesa-gl mesa-dri-gallium libpulse
